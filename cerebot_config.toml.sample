@@ -71,7 +71,7 @@ token = ""
 # number of commands sent in the last 'command_period' seconds reaches
 # 'command_limit', subsequent commands are ignored until that condition is no
 # longer true.
-command_limit = 15
+command_limit = 10
 command_period = 20
 
 # Send when users issue !<bot-name> or !help
