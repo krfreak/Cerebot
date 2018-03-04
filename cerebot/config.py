@@ -12,8 +12,7 @@ class CerebotConfig(Config):
         if not self.get("discord"):
             self.error("The discord table is undefined")
 
-        self.require_table_fields("discord", self.discord,
-                ["username", "token"])
+        self.require_table_fields("discord", self.discord, ["token"])
 
     def load(self):
         """Read the main TOML configuration data from self.path and check

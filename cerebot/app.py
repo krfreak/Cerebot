@@ -13,12 +13,13 @@ if hasattr(asyncio, "async"):
 else:
     ensure_future = asyncio.ensure_future
 
-from beem.dcss import DCSSManager
 import functools
 import logging
 import os
 import signal
 import sys
+
+from beem.dcss import DCSSManager
 
 from .discord import DiscordManager
 from .config import CerebotConfig
@@ -55,17 +56,17 @@ class Cerebot:
         self.dcss_manager = DCSSManager(self.conf.dcss)
         self.discord_manager = None
 
-    def start(self):
-        """Start the bot, set up the event loop and signal handlers,
-        and exit when the manager tasks finish.
 
-        """
+    def start(self):
+        """Start the bot, set up the event loop and signal handlers, and exit
+        when the manager tasks finish."""
 
         _log.info("Starting bot.")
 
         def do_exit(signame):
             is_error = True if signame == "SIGTERM" else False
             msg = "Shutting down bot due to signal: {}".format(signame)
+
             if is_error:
                 _log.error(msg)
             else:
@@ -77,10 +78,11 @@ class Cerebot:
                                            functools.partial(do_exit, signame))
 
         print("Event loop running forever, press Ctrl+C to interrupt.")
-        print("pid %s: send SIGINT or SIGTERM to exit." % os.getpid())
+        print("pid {}: send SIGINT or SIGTERM to exit.".format(os.getpid()))
 
         try:
             self.loop.run_until_complete(self.process())
+
         except asyncio.CancelledError:
             pass
 
@@ -88,10 +90,8 @@ class Cerebot:
         sys.exit(self.shutdown_error)
 
     def stop(self, is_error=False):
-        """Stop the app by canceling any ongoing manager tasks, which
-        will cause this app process to exit.
-
-        """
+        """Stop the app by canceling any ongoing manager tasks, which will
+        cause this app process to exit."""
 
         _log.info("Stopping bot.")
         self.shutdown_error = is_error

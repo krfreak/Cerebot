@@ -6,28 +6,28 @@
 # === DCSS IRC settings ===
 [dcss]
 
-# Freenode host and port
+# IRC hostname and port. IRC port. If not using ssl, use the default IRC port.
 hostname = "irc.freenode.net"
+port = 6667
 
 # Set to true to enable SSL support, and change the port field to an
 # ssl-enabled port.
 # use_ssl = true
+# port = 6697
+
 # If you register the nick you use for your bot, define this field to have the
 # bot log in with SASL. When using a password, for security reasons you
 # probably want to set `use_ssl = true' above to enable SSL support.
-#username = ""
-#password = ""
-#port = 6697
+# username = ""
+# password = ""
 
-# If not using ssl, use the default IRC port
-port = 6667
-
+# A unique IRC nick is required. If SASL is used, this can be different from
+# the username.
 nick = ""
 
 # Chat messages matching these regular expressions anywhere in the message will
 # not be passed on to any IRC bot. You can add regular expression patterns to
-# this array to prevent users from running certain commands. Entries here apply
-# to messages from both WebTiles and Twitch.
+# this array to prevent users from running certain commands.
 # bad_patterns = []
 
 # Generally you won't want to change any of the remaining settings in the
@@ -62,7 +62,8 @@ has_git = true
 # === Discord settings ===
 [discord]
 
-username = ""
+# A unique login token for the Bot. You can create the bot in the Discord
+# developer tools and then generate this token.
 token = ""
 
 # The variables command_limit and command_period control the rate of commands
@@ -74,7 +75,7 @@ command_limit = 15
 command_period = 20
 
 # Send when users issue !<bot-name> or !help
-help_text = """I'm a chat bot that relays commands to the DCSS IRC knowledge bots Sequell, Gretell, and Cheibriados. See the link in `??beem` for a quick guide to commands for these bots. To see discord-specific bot commands, type `!listcommands`. For help with discord roles, type `??cerebot[2]`."""
+help_text = """I'm a chat bot that relays commands to the DCSS IRC knowledge bots Sequell, Gretell, and Cheibriados. Type `??beem` for a quick guide to commands for these bots. To see discord-specific bot commands, type `!listcommands`. For help with discord roles, type `??cerebot[2]`."""
 
 # Enable this to set a role named "streaming" when the user goes into streaming
 # mode.

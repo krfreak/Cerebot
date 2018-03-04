@@ -6,7 +6,6 @@ if hasattr(asyncio, "async"):
 else:
     ensure_future = asyncio.ensure_future
 
-from beem.chat import ChatWatcher, bot_help_command
 import discord
 import logging
 import os
@@ -15,10 +14,13 @@ import re
 import signal
 import time
 
+from beem.chat import ChatWatcher, BotCommandException, bot_help_command
+
 from .version import version as Version
 
 _log = logging.getLogger()
 
+# Used to split URLs in discord messages.
 _url_regexp = (r'(https?://(?:\S+(?::\S*)?@)?(?:(?:[1-9]\d?|1\d\d|2[01]\d|22'
                r'[0-3])(?:\.(?:1?\d{1,2}|2[0-4]\d|25[0-5])){2}(?:\.(?:[1-9]\d?'
                r'|1\d\d|2[0-4]\d|25[0-4]))|(?:(?:[a-z\u00a1-\uffff0-9]+-?)*'
@@ -26,11 +28,17 @@ _url_regexp = (r'(https?://(?:\S+(?::\S*)?@)?(?:(?:[1-9]\d?|1\d\d|2[01]\d|22'
                r'[a-z\u00a1-\uffff0-9]+)*(?:\.(?:[a-z\u00a1-\uffff]{2,})))'
                r'(?::\d{2,5})?(?:/[^\s]*)?)')
 
-class DiscordChannel(ChatWatcher):
+class DiscordSource(ChatWatcher):
+    """The channel source object that handles chat for any kind of discord
+    channel. These objects are created as needed by the discord manager when
+    activity is seen in a new discord channel and cached based on message
+    activity."""
+
     def __init__(self, manager, channel, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.manager = manager
+        # The discord channel object this source is tied to.
         self.channel = channel
         self.bot_source_desc = "Private Message"
         self.admin_target_prefix = "^"
@@ -63,6 +71,10 @@ class DiscordChannel(ChatWatcher):
         return self.get_chat_name(user, True)
 
     def get_vanity_roles(self):
+        """Find which vanity roles are available on this server for use with
+        the !addrole bot command."""
+
+        # We must be associated with a server.
         if self.channel.is_private:
             return
 
@@ -72,6 +84,7 @@ class DiscordChannel(ChatWatcher):
             if r.name == "Bot" and r in server.me.roles:
                 bot_role = r
                 break
+
         if not bot_role:
             return
 
@@ -109,6 +122,9 @@ class DiscordChannel(ChatWatcher):
         return {"service" : self.manager.service, "id" : self.channel.id}
 
     def filter_markdown(self, message):
+        """Escape most markdown from message output, being careful not to
+        mangle any URLs and allowing backticks to remain."""
+
         parts = re.split(_url_regexp, message)
         result = ""
         for i, p in enumerate(parts):
@@ -122,6 +138,9 @@ class DiscordChannel(ChatWatcher):
         return result
 
     def filter_mentions(self, message):
+        """Don't output anything that would be a mention, since people can
+        abuse this to have the bot say them."""
+
         parts = re.split(r'(<@&?[0-9]+>)', message)
         result = ""
         for i, p in enumerate(parts):
@@ -134,6 +153,8 @@ class DiscordChannel(ChatWatcher):
 
     @asyncio.coroutine
     def send_chat(self, message, message_type="normal"):
+        """Clean up message output before sending it to chat."""
+
         # Clean up any markdown we don't want.
         if message_type == "monster":
             message = message.replace('```', r'\`\`\`')
@@ -143,24 +164,33 @@ class DiscordChannel(ChatWatcher):
 
         if message_type == "action":
             message = '_' + message + '_'
+        # Put monster output in a code block for readability of the tightly
+        # spaced info.
         elif message_type == "monster":
             message = '```\n' + message + '\n```'
         elif self.message_needs_escape(message):
             message = "]" + message
+
         yield from self.manager.send_message(self.channel, message)
 
 
 class DiscordManager(discord.Client):
+    """Manages the discord client, recieving discord events and handling them
+    or passing them to the appropriate channel source object."""
+
     def __init__(self, conf, dcss_manager, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.ping_task = None
-        self.shutdown = False
+
         self.service = "Discord"
         self.conf = conf
+        self.bot_commands = bot_commands
+
         self.single_user = False
+        self.ping_task = None
+        self.shutdown = False
+
         self.dcss_manager = dcss_manager
         dcss_manager.managers["Discord"] = self
-        self.bot_commands = bot_commands
         self.message_times = []
 
     def log_exception(self, e, error_msg):
@@ -171,6 +201,9 @@ class DiscordManager(discord.Client):
 
     @asyncio.coroutine
     def start_ping(self):
+        """Start a repeating 10 second ping task to help connection
+        stability."""
+
         while True:
             if self.is_closed:
                 return
@@ -195,15 +228,21 @@ class DiscordManager(discord.Client):
            or chan.is_private and not self.user_is_admin(message.author)):
             return
 
-        source = DiscordChannel(self, message.channel)
+        source = DiscordSource(self, message.channel)
         yield from source.read_chat(message.author, message.content)
 
     @asyncio.coroutine
     def on_ready(self):
+        """Handle anything that needs to be done only after Discord is fully
+        connected and ready. Currently only needed by the ping task."""
+
         self.ping_task = ensure_future(self.start_ping())
 
     @asyncio.coroutine
     def on_member_update(self, before, after):
+        """Handle Discord member state changes. Currently only used to set a
+        "streaming" role."""
+
         if not self.conf.get("set_streaming_role"):
             return
 
@@ -228,13 +267,16 @@ class DiscordManager(discord.Client):
                     after.server)
 
     def get_source_by_ident(self, source_ident):
+        """Given an 'identity' key tuple identifying a source, return the
+        source object."""
+
         channel = self.get_channel(source_ident["id"])
         if not channel:
             return None
-        return DiscordChannel(self, channel)
+        return DiscordSource(self, channel)
 
     def user_is_admin(self, user):
-        """Return True if the user is a admin."""
+        """Return True if the user is a bot admin."""
 
         admins = self.conf.get("admins")
         if not admins:
@@ -247,15 +289,16 @@ class DiscordManager(discord.Client):
 
     @asyncio.coroutine
     def start(self):
+        """Set the discord login token an connect, processing discord events
+        indefinitely."""
+
         yield from self.login(self.conf['token'])
         yield from self.connect()
 
     @asyncio.coroutine
     def disconnect(self, shutdown=False):
         """Disconnect from Discord. This will log any disconnection error, but
-        never raise.
-
-        """
+        never raise."""
 
         if self.ping_task and not self.ping_task.done():
             self.ping_task.cancel()
@@ -305,11 +348,13 @@ def bot_listcommands_command(source, user):
 def bot_botstatus_command(source, user):
     """!botstatus chat command"""
 
-    report = "Version {}".format(Version)
     mgr = source.manager
+    report = "Version {}".format(Version)
+
     names = []
     for s in mgr.servers:
         names.append(s.name)
+
     names.sort()
     report = "Version: {}; Listening to servers: {}".format(Version,
             ", ".join(names))
@@ -403,10 +448,12 @@ def bot_deal_command(source, user):
     message = yield from mgr.send_message(source.channel,
             '```{}```'.format('\n'.join(lines)))
     yield from asyncio.sleep(0.5)
+
     for i in range(3):
         yield from mgr.edit_message(message, '```{}```'.format(
             '\n'.join(lines[:i] + [glasses]+lines[i + 1:])))
         yield from asyncio.sleep(0.5)
+
     yield from mgr.edit_message(message, '```{}```'.format(
         '\n'.join(lines[:1] + [dealwith] + lines[2:3] + [glasson])))
 
@@ -418,10 +465,12 @@ def bot_dance_command(source, user):
     figures = [':D|-<', ':D/-<', ':D|-<', r':D\\-<']
     message = yield from mgr.send_message(source.channel, figures[0])
     yield from asyncio.sleep(0.25)
+
     for n in range(2):
         for f in figures[0 if n else 1:]:
             yield from mgr.edit_message(message, f)
             yield from asyncio.sleep(0.25)
+
     yield from mgr.edit_message(message, figures[0])
 
 @asyncio.coroutine
@@ -432,10 +481,12 @@ def bot_botdance_command(source, user):
     figures = ['└[^_^]┐', '┌[^_^]┘']
     message = yield from mgr.send_message(source.channel, figures[0])
     yield from asyncio.sleep(0.25)
+
     for n in range(2):
         for f in figures[0 if n else 1:]:
             yield from mgr.edit_message(message, f)
             yield from asyncio.sleep(0.25)
+
     yield from mgr.edit_message(message, figures[0])
 
 @asyncio.coroutine
@@ -481,6 +532,7 @@ def center_string_in_line(string, line):
    leftn = int((len(line) - len(string))/2)
    if len(string) % 2 == 0:
        leftn += 1
+
    rightn = int((len(string) - len(line))/2)
    if len(string) >= len(line):
        return string[rightn:leftn]
@@ -546,6 +598,7 @@ def bot_firestorm_command(source, user, target=None):
             coords = random.sample(range(0, 7), num)
             for c in coords:
                 lines[n] = lines[n][:4 + c] + 'v' + lines[n][4 + c + 1:]
+
         yield from mgr.edit_message(message,
                 '```{}```'.format('\n'.join(lines)))
         yield from asyncio.sleep(0.8)
