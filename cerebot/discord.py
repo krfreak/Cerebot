@@ -42,8 +42,7 @@ class DiscordSource(ChatWatcher):
         self.manager = manager
         # The discord channel object this source is tied to.
         self.channel = channel
-        self.bot_source_desc = "Private Message"
-        self.admin_target_prefix = "^"
+        self.source_type_desc = "channel"
 
     # Set to the bot only if we're in PM, otherwise None.
     @property
@@ -72,6 +71,59 @@ class DiscordSource(ChatWatcher):
     def get_dcss_nick(self, user):
         return self.get_chat_name(user, True)
 
+    def user_is_admin(self, user):
+        """Return True if the user is a bot admin in the given channel by our
+        configuration."""
+
+        if not self.manager.conf.get('admins'):
+            return False
+
+        for u in self.manager.conf['admins']:
+            for s in self.manager.servers:
+                if s.get_member(u) == user:
+                    return True
+
+        return False
+
+    def user_is_ignored(self, user):
+        """Return True if the user is ignored in the given channel by our
+        configuration."""
+
+        if not self.manager.conf.get('ignored_users'):
+            return False
+
+        for u in self.manager.conf['ignored_users']:
+            for s in self.manager.servers:
+                if s.get_member(u) == user:
+                    return True
+
+        return False
+
+    def is_allowed_user(self, user):
+        """Return true if the user is allowed to execute commands in the
+        current channel."""
+
+        if self.user_is_admin(user):
+            return True
+
+        if user.bot:
+            return False
+
+        if self.user_is_ignored(user):
+            return False
+
+        return True
+
+    def get_user_by_name(self, name):
+        if self.channel.is_private:
+            for s in self.manager.servers:
+                member = s.get_member_named(name)
+                if member:
+                    return member
+
+        else:
+            return self.channel.server.get_member_named(name)
+
     def get_vanity_roles(self):
         """Find which vanity roles are available on this server for use with
         the !addrole bot command."""
@@ -99,14 +151,6 @@ class DiscordSource(ChatWatcher):
                 roles.append(r)
 
         return roles
-
-    def bot_command_allowed(self, user, command):
-        entry = self.manager.bot_commands[command]
-        if (entry["source_restriction"] == "channel"
-            and self.channel.is_private):
-            return (False, "This command must be run in a channel.")
-
-        return super().bot_command_allowed(user, command)
 
     def handle_timeout(self):
         if self.manager.handle_timeout():
@@ -152,6 +196,16 @@ class DiscordSource(ChatWatcher):
             result += p
 
         return result
+
+    def check_bot_command_restrictions(self, user, entry):
+        super().check_bot_command_restrictions(user, entry)
+
+        if self.user_is_admin(user):
+            return
+
+        if entry.get("require_public_channel") and self.channel.is_private:
+            raise BotCommandException(
+                    "This command must be run in a public channel.")
 
     @asyncio.coroutine
     def send_chat(self, message, message_type="normal"):
@@ -279,17 +333,6 @@ class DiscordManager(discord.Client):
             return None
         return DiscordSource(self, channel)
 
-    def user_is_admin(self, user):
-        """Return True if the user is a bot admin."""
-
-        admins = self.conf.get("admins")
-        if not admins:
-            return False
-
-        for u in admins:
-            if u == str(user):
-                return True
-        return False
 
     @asyncio.coroutine
     def start(self):
@@ -332,13 +375,11 @@ def bot_listcommands_command(source, user):
     """!listcommands chat command"""
 
     commands = []
-    for com in bot_commands.keys():
-        if (bot_commands[com]["source_restriction"] == "admin"
-            and not source.manager.user_is_admin(user)):
-            continue
+    for com in bot_commands:
+        try:
+            source.check_bot_command_restrictions(user, bot_commands[com])
 
-        if (bot_commands[com]["source_restriction"] == "channel"
-            and source.channel.is_private):
+        except BotCommandException:
             continue
 
         commands.append(source.bot_command_prefix + com)
@@ -367,14 +408,19 @@ def bot_botstatus_command(source, user):
 def bot_debugmode_command(source, user, state=None):
     """!debugmode chat command"""
 
+    state_desc = "on" if _log.isEnabledFor(logging.DEBUG) else "off"
     if state is None:
-        state_desc = "on" if _log.isEnabledFor(logging.DEBUG) else "off"
         yield from source.send_chat(
                 "DEBUG level logging is currently {}.".format(state_desc))
         return
 
+    if state == state_desc:
+        raise BotCommandException("DEBUG level already set to {}".format(
+            state))
+
     state_val = "DEBUG" if state == "on" else "INFO"
     _log.setLevel(state_val)
+
     yield from source.send_chat("DEBUG level logging set to {}.".format(state))
 
 @asyncio.coroutine
@@ -383,8 +429,7 @@ def bot_listroles_command(source, user):
 
     roles = source.get_vanity_roles()
     if not roles:
-        yield from source.send_chat("No available roles found.")
-        return
+        raise BotCommandException("No available roles found.")
 
     yield from source.send_chat(', '.join(r.name for r in roles))
 
@@ -393,16 +438,24 @@ def bot_addrole_command(source, user, rolename):
     """!addrole chat command"""
 
     roles = source.get_vanity_roles()
+    if not roles:
+        raise BotCommandException("No available roles found.")
+
     for r in roles:
         if rolename.lower() != r.name.lower():
             continue
+
+        if r in user.roles:
+            raise BotCommandException(
+                    "Member {} already has role {}".format(user.name,
+                        rolename))
 
         yield from source.manager.add_roles(user, r)
         yield from source.send_chat(
                 "Member {} has been given role {}".format(user.name, rolename))
         return
 
-    yield from source.send_chat("Unknown role: {}".format(rolename))
+    raise BotCommandException("Unknown role: {}".format(rolename))
 
 @asyncio.coroutine
 def bot_removerole_command(source, user, rolename):
@@ -414,17 +467,16 @@ def bot_removerole_command(source, user, rolename):
             continue
 
         if r not in user.roles:
-            yield from source.send_chat(
+            raise BotCommandException(
                     "Member {} does not have role {}".format(user.name,
                         rolename))
-            return
 
         yield from source.manager.remove_roles(user, r)
         yield from source.send_chat(
                 "Member {} has lost role {}".format(user.name, rolename))
         return
 
-    yield from source.send_chat("Unknown role: {}".format(rolename))
+    raise BotCommandException("Unknown role: {}".format(rolename))
 
 @asyncio.coroutine
 def bot_glasses_command(source, user):
@@ -508,10 +560,9 @@ def bot_say_command(source, user, server, channel, message):
             dest_server = s
 
     if not dest_server:
-        yield from source.send_chat("Can't find server match for {}, must "
+        raise BotCommandException("Can't find server match for {}, must "
                 "match one of: {}".format(server, ", ".join(
                     sorted([s.name for s in mgr.servers]))))
-        return
 
     dest_channel = None
     chan_filt = lambda c: c.type == discord.ChannelType.text
@@ -525,7 +576,7 @@ def bot_say_command(source, user, server, channel, message):
             dest_channel = c
 
     if not dest_channel:
-        yield from source.send_chat("Can't find channel match for {}, must "
+        raise BotCommandException("Can't find channel match for {}, must "
                 "match one of: {}".format(channel,
                     ", ".join(sorted([c.name for c in channels]))))
 
@@ -671,87 +722,76 @@ def bot_glaciate_command(source, user, target=None):
 # Discord bot commands
 bot_commands = {
     "listcommands" : {
-        "args" : None,
-        "single_user_allowed" : True,
-        "source_restriction" : None,
+        "unlogged" : True,
         "function" : bot_listcommands_command,
     },
     "botstatus" : {
-        "args" : None,
-        "single_user_allowed" : True,
-        "source_restriction" : "admin",
+        "require_admin" : True,
         "function" : bot_botstatus_command,
     },
     "debugmode" : {
+        "require_admin" : True,
         "args" : [
             {
                 "pattern" : r"(on|off)$",
                 "description" : "on|off",
                 "required" : False
             } ],
-        "single_user_allowed" : True,
         "source_restriction" : "admin",
         "function" : bot_debugmode_command,
     },
     "bothelp" : {
-        "args" : None,
-        "single_user_allowed" : True,
-        "source_restriction" : None,
+        "unlogged" : True,
         "function" : bot_help_command,
     },
     "listroles" : {
-        "args" : None,
-        "single_user_allowed" : True,
-        "source_restriction" : "channel",
+        "require_public_channel" : True,
+        "unlogged" : True,
         "function" : bot_listroles_command,
     },
     "addrole" : {
+        "require_public_channel" : True,
         "args" : [
             {
                 "pattern" : r".+$",
                 "description" : "ROLE",
                 "required" : True
             } ],
-        "single_user_allowed" : True,
-        "source_restriction" : "channel",
         "function" : bot_addrole_command,
     },
     "removerole" : {
+        "require_public_channel" : True,
         "args" : [
             {
                 "pattern" : r".+$",
                 "description" : "ROLE",
                 "required" : True
             } ],
-        "single_user_allowed" : True,
-        "source_restriction" : "channel",
         "function" : bot_removerole_command,
     },
     "glasses" : {
-        "args" : None,
-        "single_user_allowed" : True,
-        "source_restriction" : None,
+        "require_public_channel" : True,
+        "unlogged" : True,
+        "source_restriction" : "channel",
         "function" : bot_glasses_command,
     },
     "deal" : {
-        "args" : None,
-        "single_user_allowed" : True,
-        "source_restriction" : None,
+        "require_public_channel" : True,
+        "unlogged" : True,
         "function" : bot_deal_command,
     },
     "dance" : {
-        "args" : None,
-        "single_user_allowed" : True,
-        "source_restriction" : None,
+        "require_public_channel" : True,
+        "unlogged" : True,
         "function" : bot_dance_command,
     },
     "botdance" : {
-        "args" : None,
-        "single_user_allowed" : True,
-        "source_restriction" : None,
+        "require_public_channel" : True,
+        "unlogged" : True,
         "function" : bot_botdance_command,
     },
     "say" : {
+        "require_admin" : True,
         "args" : [
             {
                 "pattern" : r".+$",
@@ -769,30 +809,28 @@ bot_commands = {
                 "required" : True
             },
         ],
-        "single_user_allowed" : True,
-        "source_restriction" : "admin",
         "function" : bot_say_command,
     },
     "firestorm" : {
+        "require_public_channel" : True,
+        "unlogged" : True,
         "args" : [
             {
                 "pattern" : r".*",
                 "description" : "target",
                 "required" : False
             } ],
-        "single_user_allowed" : True,
-        "source_restriction" : None,
         "function" : bot_firestorm_command,
     },
     "glaciate" : {
+        "require_public_channel" : True,
+        "unlogged" : True,
         "args" : [
             {
                 "pattern" : r".*",
                 "description" : "target",
                 "required" : False
             } ],
-        "single_user_allowed" : True,
-        "source_restriction" : None,
         "function" : bot_glaciate_command,
     },
 }
