@@ -30,6 +30,11 @@ _url_regexp = (r'(https?://(?:\S+(?::\S*)?@)?(?:(?:[1-9]\d?|1\d\d|2[01]\d|22'
                r'[a-z\u00a1-\uffff0-9]+)*(?:\.(?:[a-z\u00a1-\uffff]{2,})))'
                r'(?::\d{2,5})?(?:/[^\s]*)?)')
 
+# How long we allow inactivity in a channel before we remove its channel source
+# object from the cache.
+_channel_idle_timeout = 30 * 60
+
+
 class DiscordSource(ChatWatcher):
     """The channel source object that handles chat for any kind of discord
     channel. These objects are created as needed by the discord manager when
@@ -43,6 +48,9 @@ class DiscordSource(ChatWatcher):
         # The discord channel object this source is tied to.
         self.channel = channel
         self.source_type_desc = "channel"
+        # Time since any message was last seen in the channel, used for the
+        # Discord manager cache of these objects.
+        self.time_last_message = None
 
     # Set to the bot only if we're in PM, otherwise None.
     @property
@@ -152,15 +160,6 @@ class DiscordSource(ChatWatcher):
 
         return roles
 
-    def handle_timeout(self):
-        if self.manager.handle_timeout():
-            _log.info("%s: Command ignored due to command limit (channel: %s, "
-                      "requester: %s): %s", self.manager.service,
-                      self.describe(), sender, message)
-            return True
-
-        return False
-
     def get_source_ident(self):
         """Get a unique identifier hash of the discord channel."""
 
@@ -244,10 +243,10 @@ class DiscordManager(discord.Client):
         self.single_user = False
         self.ping_task = None
         self.shutdown = False
+        self.sources = set()
 
         self.dcss_manager = dcss_manager
         dcss_manager.managers["Discord"] = self
-        self.message_times = []
 
     def log_exception(self, error_msg):
         """Log an exception and the associated traceback."""
@@ -279,14 +278,40 @@ class DiscordManager(discord.Client):
 
             yield from asyncio.sleep(10)
 
+    def get_channel_source(self, channel):
+        """Get the source object of the given discord channel object."""
+
+        for s in self.sources:
+            if s.channel == channel:
+                return s
+
+        return
+
+    def expire_idle_channels(self, current_time):
+        """Remove the cached source object for any channels that have been idle
+        for too long."""
+
+        for c in list(self.sources):
+            if current_time - c.time_last_message >= _channel_idle_timeout:
+                self.sources.remove(c)
+
     @asyncio.coroutine
     def on_message(self, message):
-        chan = message.channel
-        if (not self.is_logged_in
-           or chan.is_private and not self.user_is_admin(message.author)):
+        """Handle a Discord chat message."""
+
+        if not self.is_logged_in:
             return
 
-        source = DiscordSource(self, message.channel)
+        current_time = time.time()
+        self.expire_idle_channels(current_time)
+
+        source = self.get_channel_source(message.channel)
+        if not source:
+            source = DiscordSource(self, message.channel)
+            self.sources.add(source)
+
+        source.time_last_message = current_time
+
         yield from source.read_chat(message.author, message.content)
 
     @asyncio.coroutine
@@ -331,7 +356,8 @@ class DiscordManager(discord.Client):
         channel = self.get_channel(source_ident["id"])
         if not channel:
             return None
-        return DiscordSource(self, channel)
+
+        return self.get_channel_source(channel)
 
 
     @asyncio.coroutine
@@ -356,18 +382,10 @@ class DiscordManager(discord.Client):
         try:
             yield from self.close()
 
-    def handle_timeout(self):
-        current_time = time.time()
-        for timestamp in list(self.message_times):
-            if current_time - timestamp >= self.conf["command_period"]:
-                self.message_times.remove(timestamp)
-        if len(self.message_times) >= self.conf["command_limit"]:
-            return True
         except Exception:
             self.log_exception("Error when disconnecting")
 
-        self.message_times.append(current_time)
-        return False
+        self.shutdown = shutdown
 
 
 @asyncio.coroutine
