@@ -18,6 +18,7 @@ import logging
 import os
 import signal
 import sys
+import traceback
 
 from beem.dcss import DCSSManager
 
@@ -46,16 +47,20 @@ class Cerebot:
 
         try:
             self.conf.load()
-        except Exception as e:
-            err_reason = type(e).__name__
-            if len(e.args):
-                err_reason = e.args[0]
-            _log.critical(err_reason)
-            sys.exit(1)
+
+        except Exception:
+            self.critical_error("App Error loading config file {}:".format(
+                self.conf.path))
 
         self.dcss_manager = DCSSManager(self.conf.dcss)
         self.discord_manager = None
 
+    def critical_error(self, error_msg):
+        exc_type, exc_value, exc_tb = sys.exc_info()
+        _log.critical("App Error: %s", error_msg)
+        _log.error("".join(traceback.format_exception(
+            exc_type, exc_value, exc_tb)))
+        sys.exit(1)
 
     def start(self):
         """Start the bot, set up the event loop and signal handlers, and exit

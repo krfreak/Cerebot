@@ -12,7 +12,9 @@ import os
 import random
 import re
 import signal
+import sys
 import time
+import traceback
 
 from beem.chat import ChatWatcher, BotCommandException, bot_help_command
 
@@ -193,11 +195,13 @@ class DiscordManager(discord.Client):
         dcss_manager.managers["Discord"] = self
         self.message_times = []
 
-    def log_exception(self, e, error_msg):
-        error_reason = type(e).__name__
-        if e.args:
-            error_reason = "{}: {}".format(error_reason, e.args[0])
-        _log.error("Discord Error: %s: %s", error_msg, error_reason)
+    def log_exception(self, error_msg):
+        """Log an exception and the associated traceback."""
+
+        exc_type, exc_value, exc_tb = sys.exc_info()
+        _log.error("Discord Error: %s:", error_msg)
+        _log.error("".join(traceback.format_exception(
+            exc_type, exc_value, exc_tb)))
 
     @asyncio.coroutine
     def start_ping(self):
@@ -214,8 +218,8 @@ class DiscordManager(discord.Client):
             except asyncio.CancelledError:
                 return
 
-            except Exception as e:
-                self.log_exception(e, "Unable to send ping")
+            except Exception:
+                self.log_exception("Unable to send ping")
                 ensure_future(self.disconnect())
                 return
 
@@ -308,9 +312,6 @@ class DiscordManager(discord.Client):
 
         try:
             yield from self.close()
-        except Exception as e:
-            self.log_exception(e, "Error when disconnecting")
-        self.shutdown = shutdown
 
     def handle_timeout(self):
         current_time = time.time()
@@ -319,6 +320,8 @@ class DiscordManager(discord.Client):
                 self.message_times.remove(timestamp)
         if len(self.message_times) >= self.conf["command_limit"]:
             return True
+        except Exception:
+            self.log_exception("Error when disconnecting")
 
         self.message_times.append(current_time)
         return False
