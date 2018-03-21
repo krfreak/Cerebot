@@ -320,7 +320,12 @@ class DiscordManager(discord.Client):
 
         source.time_last_message = current_time
 
-        yield from source.read_chat(message.author, message.content)
+        # Make '*?' an alias to '@?' in Discord to avoid making mentions.
+        content = message.content
+        if content.startswith("*?"):
+            content = '@' + content[1:]
+
+        yield from source.read_chat(message.author, content)
 
     @asyncio.coroutine
     def on_ready(self):
