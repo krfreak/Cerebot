@@ -46,7 +46,7 @@ sequell_patterns = ['^\?\?', '(?i)^[qr]\?\?', '[^?]\?\?\?? *$', '^\?/',
 [[dcss.bots]]
 nick = "Gretell"
 # Like sequell_patterns above, except for the DCSS monster lookup.
-monster_patterns = ['^@\?']
+monster_patterns = ['^[@*]\?']
 
 [[dcss.bots]]
 nick = "Cheibriados"
