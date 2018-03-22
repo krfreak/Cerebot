@@ -123,14 +123,22 @@ class DiscordSource(ChatWatcher):
         return True
 
     def get_user_by_name(self, name):
+        is_id = name.isdigit()
         if self.channel.is_private:
             for s in self.manager.servers:
-                member = s.get_member_named(name)
+                if is_id:
+                    member = s.get_member(name)
+                else:
+                    member = s.get_member_named(name)
+
                 if member:
                     return member
 
         else:
-            return self.channel.server.get_member_named(name)
+            if is_id:
+                return self.channel.server.get_member(name)
+            else:
+                return self.channel.server.get_member_named(name)
 
     def get_vanity_roles(self):
         """Find which vanity roles are available on this server for use with
