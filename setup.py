@@ -31,8 +31,7 @@ setup(
         "pytoml",
         "beem",
         ],
-    data_files=[('share/cerebot', ['cerebot_config.toml.sample',
-                                'docs/commands.md'])],
+    data_files=[('share/cerebot', ['cerebot_config.toml.sample'])],
     entry_points={
         'console_scripts': [
             'cerebot=cerebot.app:main',
