@@ -79,45 +79,14 @@ class DiscordSource(ChatWatcher):
     def get_dcss_nick(self, user):
         return self.get_chat_name(user, True)
 
-    def user_is_admin(self, user):
-        """Return True if the user is a bot admin in the given channel by our
-        configuration."""
-
-        if not self.manager.conf.get('admins'):
-            return False
-
-        for u in self.manager.conf['admins']:
-            for s in self.manager.servers:
-                if s.get_member(u) == user:
-                    return True
-
-        return False
-
-    def user_is_ignored(self, user):
-        """Return True if the user is ignored in the given channel by our
-        configuration."""
-
-        if not self.manager.conf.get('ignored_users'):
-            return False
-
-        for u in self.manager.conf['ignored_users']:
-            for s in self.manager.servers:
-                if s.get_member(u) == user:
-                    return True
-
-        return False
-
     def is_allowed_user(self, user):
         """Return true if the user is allowed to execute commands in the
         current channel."""
 
-        if self.user_is_admin(user):
+        if self.manager.user_is_admin(user):
             return True
 
-        if user.bot:
-            return False
-
-        if self.user_is_ignored(user):
+        if user.bot or self.manager.user_is_ignored(user):
             return False
 
         return True
@@ -207,7 +176,7 @@ class DiscordSource(ChatWatcher):
     def check_bot_command_restrictions(self, user, entry):
         super().check_bot_command_restrictions(user, entry)
 
-        if self.user_is_admin(user):
+        if self.manager.user_is_admin(user):
             return
 
         if entry.get("require_public_channel") and self.channel.is_private:
@@ -372,6 +341,33 @@ class DiscordManager(discord.Client):
 
         return self.get_channel_source(channel)
 
+    def user_is_admin(self, user):
+        """Return True if the user is a bot admin in the given channel by our
+        configuration."""
+
+        if not self.conf.get('admins'):
+            return False
+
+        for u in self.conf['admins']:
+            for s in self.servers:
+                if s.get_member(u) == user:
+                    return True
+
+        return False
+
+    def user_is_ignored(self, user):
+        """Return True if the user is ignored in the given channel by our
+        configuration."""
+
+        if not self.conf.get('ignored_users'):
+            return False
+
+        for u in self.conf['ignored_users']:
+            for s in self.servers:
+                if s.get_member(u) == user:
+                    return True
+
+        return False
 
     @asyncio.coroutine
     def start(self):
